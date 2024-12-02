@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "steps.syscall.socket.schema.json",
+  "title": "The socket syscall test step",
+  "description": "The socket syscall test step runs the socket system call with the provided arguments.",
+  "properties": {
+    "domain": {
+      "description": "The socket domain, expressed as one of the supported socket domains or as integer",
+      "type": [
+        "integer",
+        "string"
+      ],
+      "minimum": 0,
+      "minLength": 1,
+      "examples": [
+        "AF_INET"
+      ]
+    },
+    "type": {
+      "description": "The socket type, expressed as one of the supported socket types or as integer",
+      "type": [
+        "integer",
+        "string"
+      ],
+      "minimum": 0,
+      "minLength": 1,
+      "examples": [
+        "SOCK_STREAM"
+      ]
+    },
+    "protocol": {
+      "description": "The socket protocol, expressed as one of the supported socket protocols or as integer",
+      "type": [
+        "integer",
+        "string"
+      ],
+      "minimum": 0,
+      "minLength": 1,
+      "examples": [
+        "IPPROTO_TCP",
+        0
+      ]
+    },
+    "x-metadata": {
+      "not": {},
+      "type": "object",
+      "default": {
+        "type": "steps:syscall",
+        "args": {
+          "domain": {
+            "fieldType": "socket_domain"
+          },
+          "type": {
+            "fieldType": "socket_type"
+          },
+          "protocol": {
+            "fieldType": "socket_protocol"
+          }
+        },
+        "ret": {
+          "fieldType": "fd"
+        }
+      }
+    }
+  },
+  "required": [
+    "domain",
+    "type",
+    "protocol"
+  ]
+}
