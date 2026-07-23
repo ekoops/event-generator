@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -187,6 +188,19 @@ func (cw *CommandWrapper) run(cmd *cobra.Command, _ []string) {
 		abort()
 	}
 
+	// Calculate the number of tests that are eligible to be run. The execution is terminated in case of zero eligible
+	// tests. It is not expected to have zero eligible tests in a process other than the root one.
+	eligibleTestsNum := getEligibleTestsNum(testSuites)
+	if eligibleTestsNum == 0 {
+		if !isRootProcess {
+			logger.Error(fmt.Errorf("no eligible tests to run"), "Error evaluating tests")
+			abort()
+		}
+		logger.Info("No eligible tests to run. Quitting")
+		cancel()
+		return
+	}
+
 	runnerBuilder, err := cw.createRunnerBuilder()
 	if err != nil {
 		logger.Error(err, "Error creating runner builder")
@@ -234,7 +248,7 @@ func (cw *CommandWrapper) run(cmd *cobra.Command, _ []string) {
 			defer waitGroup.Done()
 			defer close(reportCollectionCompletedCh)
 			defer close(reportCh)
-			expectedReportsNum := getTestsNum(testSuites)
+			expectedReportsNum := eligibleTestsNum
 			testSuitesReports, err := collectTestSuitesReports(ctx, expectedReportsNum, reportCh)
 			if err != nil {
 				return
@@ -285,8 +299,18 @@ func (cw *CommandWrapper) run(cmd *cobra.Command, _ []string) {
 		testSuiteName := testSuite.RuleName
 		logger := baseLogger.WithValues("testSuiteName", testSuiteName)
 		logInfoIf(logger, isRootProcess, "Starting test suite execution...")
-		// Run all tests in the test suite.
+
+		atLeastOneEligible := false
+
+		// Run all eligible tests in the test suite.
 		for _, testInfo := range testSuite.TestsInfo {
+			if isEligible, reason := IsTestEligible(testInfo.Test); !isEligible {
+				logInfoIf(logger, isRootProcess, "Skipped non-eligible test", "reason", reason)
+				continue
+			}
+
+			atLeastOneEligible = true
+
 			// Wrap execution in a function to allow deferring sendEmptyTestReportIfPanicOrFailure.
 			func() {
 				testExecutionFailed := false
@@ -307,6 +331,12 @@ func (cw *CommandWrapper) run(cmd *cobra.Command, _ []string) {
 				}
 			}()
 		}
+
+		if !atLeastOneEligible {
+			logInfoIf(logger, isRootProcess, "No eligible tests to run. Skipping test suite")
+			continue
+		}
+
 		logInfoIf(logger, isRootProcess, "Test suite execution completed")
 	}
 
@@ -444,6 +474,52 @@ func loadTestsFromDescriptionFile(logger logr.Logger, testSuiteLoader suite.Load
 	return testSuiteLoader.Load(descriptionFile)
 }
 
+// getEligibleTestsNum returns the total number of eligible tests contained in the provided test suites.
+func getEligibleTestsNum(testSuites []*suite.Suite) int {
+	count := 0
+	for _, testSuite := range testSuites {
+		for _, testInfo := range testSuite.TestsInfo {
+			if isEligible, _ := IsTestEligible(testInfo.Test); isEligible {
+				count++
+			}
+		}
+	}
+	return count
+}
+
+// IsTestEligible verifies if the provided test is eligible to be run and returns a boolean indicating it. If the test
+// is not eligible, it also returns a non-empty reason explaining why it is not; reason is empty otherwise.
+func IsTestEligible(testDesc *loader.Test) (isEligible bool, reason string) {
+	runIf := testDesc.RunIf
+	if runIf == nil {
+		return true, ""
+	}
+
+	archCond := runIf.Arch
+	if archCond == nil {
+		return true, ""
+	}
+
+	const currentArch = runtime.GOARCH
+	archCondOp := archCond.Op
+	switch archCondOp {
+	case loader.StringCondOpEqual:
+		val := archCond.Val.(string)
+		if val == currentArch {
+			return true, ""
+		}
+		return false, fmt.Sprintf("%s (cond arch) != %s (current arch)", val, currentArch)
+	case loader.StringCondOpNotEqual:
+		val := archCond.Val.(string)
+		if val != currentArch {
+			return true, ""
+		}
+		return false, fmt.Sprintf("%s (cond arch) == %s (current arch)", val, currentArch)
+	default:
+		panic(fmt.Sprintf("unsupported string condition operator for host architecture %v", archCondOp))
+	}
+}
+
 // createRunnerBuilder creates a new runner builder.
 func (cw *CommandWrapper) createRunnerBuilder() (runner.Builder, error) {
 	resourceProcessBuilder := processbuilder.New()
@@ -487,15 +563,6 @@ func (cw *CommandWrapper) createTester(logger logr.Logger) (tester.Tester, error
 
 	t := testerimpl.New(httpRetriever, cw.TestIDEnvKey, testIDIgnorePrefix)
 	return t, nil
-}
-
-// getTestsNum returns the total number of tests contained in the provided test suites.
-func getTestsNum(testSuites []*suite.Suite) int {
-	count := 0
-	for _, testSuite := range testSuites {
-		count += len(testSuite.TestsInfo)
-	}
-	return count
 }
 
 // collectTestSuitesReports collects test reports for all test suites from the provided report channel and returns a
@@ -582,9 +649,10 @@ func (cw *CommandWrapper) appendFlags(environ []string, flagSets ...*pflag.FlagS
 }
 
 // logInfoIf outputs to the provided logger the provided informational message only if the provided condition is true.
-func logInfoIf(logger logr.Logger, cond bool, msg string) {
+// The provided keysAndValues are passed as is to the logger.
+func logInfoIf(logger logr.Logger, cond bool, msg string, keysAndValues ...any) {
 	if cond {
-		logger.Info(msg)
+		logger.Info(msg, keysAndValues...)
 	}
 }
 

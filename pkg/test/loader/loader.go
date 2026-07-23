@@ -69,7 +69,9 @@ func (l *Loader) Load(r io.Reader) (*Description, error) {
 
 	// Decode generic description into actual Description structure.
 	desc := &Description{}
-	if err := decode(rawDesc, desc, decodeTestRunnerType, decodeTestResource, decodeTestStep); err != nil {
+	decodeHooks := []mapstructure.DecodeHookFunc{decodeTestRunnerType, decodeTestResource, decodeTestStep,
+		decodeStringCond}
+	if err := decode(rawDesc, desc, decodeHooks...); err != nil {
 		return nil, fmt.Errorf("error decoding description: %w", err)
 	}
 
@@ -293,7 +295,7 @@ func getFieldBindings(containingArgName string, args map[string]any) []*TestStep
 
 // decodeTestStepType is a mapstructure.DecodeHookFunc allowing to unmarshal a TestStepType.
 func decodeTestStepType(fromType, toType reflect.Type, from any) (any, error) {
-	if fromType.Kind() != reflect.Map || toType != reflect.TypeOf(TestStepType("")) {
+	if fromType.Kind() != reflect.String || toType != reflect.TypeOf(TestStepType("")) {
 		return from, nil
 	}
 
@@ -336,6 +338,51 @@ func decodeTestStepSyscallName(fromType, toType reflect.Type, from any) (any, er
 	}
 }
 
+// decodeStringCond is a mapstructure.DecodeHookFunc allowing to unmarshal a StringCond.
+func decodeStringCond(fromType, toType reflect.Type, from any) (any, error) {
+	if fromType.Kind() != reflect.Map || toType != reflect.TypeOf(StringCond{}) {
+		return from, nil
+	}
+
+	strCond := &StringCond{}
+	if err := decode(from, strCond, decodeStringCondOp); err != nil {
+		return nil, fmt.Errorf("error decoding string condition: %w", err)
+	}
+
+	decodedOp := strCond.Op
+	// Make sure to keep Test.validateRunIf in sync if val starts to store something other than a string.
+	var val any
+	switch decodedOp {
+	case StringCondOpEqual, StringCondOpNotEqual:
+		rawVal, ok := from.(map[string]any)["val"]
+		if !ok {
+			return nil, fmt.Errorf("error decoding string condition: 'val' not present")
+		}
+		if val, ok = rawVal.(string); !ok {
+			return nil, fmt.Errorf("error decoding string condition val: expected a string value, got %T", rawVal)
+		}
+	default:
+		return nil, fmt.Errorf("unknown string condition operator %q", decodedOp)
+	}
+
+	strCond.Val = val
+	return strCond, nil
+}
+
+// decodeStringCondOp is a mapstructure.DecodeHookFunc allowing to unmarshal a StringCondOp.
+func decodeStringCondOp(fromType, toType reflect.Type, from any) (any, error) {
+	if fromType.Kind() != reflect.String || toType != reflect.TypeOf(StringCondOp("")) {
+		return from, nil
+	}
+
+	switch op := StringCondOp(from.(string)); op {
+	case StringCondOpEqual, StringCondOpNotEqual:
+		return op, nil
+	default:
+		return nil, fmt.Errorf("unknown string condition operator %q", op)
+	}
+}
+
 // Description contains the description of the tests.
 type Description struct {
 	Tests []Test `yaml:"tests" mapstructure:"tests"`
@@ -360,6 +407,11 @@ func (c *Description) validate(reservedEnvKeyPrefixes, reservedEnvKeys []string)
 				testIndex, err)
 		}
 
+		if err := test.validateRunIf(); err != nil {
+			return fmt.Errorf("error validating 'run if' conditions for test %q (index: %d): %w", test.Name,
+				testIndex, err)
+		}
+
 		if err := test.validateContext(reservedEnvKeyPrefixes, reservedEnvKeys); err != nil {
 			return fmt.Errorf("error validating test context: %w", err)
 		}
@@ -381,6 +433,7 @@ type Test struct {
 	Rule            *string              `yaml:"rule,omitempty" mapstructure:"rule"`
 	Name            string               `yaml:"name" mapstructure:"name"`
 	Description     *string              `yaml:"description,omitempty" mapstructure:"description"`
+	RunIf           *RunIfSpec           `yaml:"runIf,omitempty" mapstructure:"runIf"`
 	Runner          TestRunnerType       `yaml:"runner" mapstructure:"runner"`
 	Context         *TestContext         `yaml:"context,omitempty" mapstructure:"context"`
 	BeforeScript    *string              `yaml:"before,omitempty" mapstructure:"before"`
@@ -399,6 +452,29 @@ type Test struct {
 	// source).
 	SourceIndex int `yaml:"-" mapstructure:"-"`
 }
+
+// RunIfSpec specifies conditions under which the current Test should be run. If multiple conditions are specified,
+// their logical outcomes are ANDed.
+type RunIfSpec struct {
+	Arch *StringCond `yaml:"arch,omitempty" mapstructure:"arch"`
+}
+
+// StringCond is a string condition comparing the subject with Val, following the semantics of the operator Op. Val can
+// be of whatever type the operator allows. The subject is implicitly determined by the context.
+type StringCond struct {
+	Op  StringCondOp `yaml:"op" mapstructure:"op"`
+	Val any          `yaml:"val" mapstructure:"-"`
+}
+
+// StringCondOp is the operator of a string condition.
+type StringCondOp string
+
+const (
+	// StringCondOpEqual specifies that the subject must be equal to the provided value.
+	StringCondOpEqual StringCondOp = "eq"
+	// StringCondOpNotEqual specifies that the subject must not be equal to the provided value.
+	StringCondOpNotEqual StringCondOp = "ne"
+)
 
 // validateNameUniqueness validates that names used for test resources and steps are unique.
 func (t *Test) validateNameUniqueness() error {
@@ -441,6 +517,27 @@ func (t *Test) validateNameUniqueness() error {
 	}
 
 	return nil
+}
+
+func (t *Test) validateRunIf() error {
+	runIf := t.RunIf
+	if runIf == nil {
+		return nil
+	}
+
+	arch := runIf.Arch
+	if arch == nil {
+		return nil
+	}
+
+	// The current loader logic makes sure the architecture value is a string (see decodeStringCond).
+	archVal := arch.Val.(string)
+	switch archVal {
+	case "amd64", "arm64":
+		return nil
+	default:
+		return fmt.Errorf("invalid architecture string condition val %q", archVal)
+	}
 }
 
 // validateContext ensures that the Test's Context is valid.

@@ -31,6 +31,10 @@ var (
 	bindingSchema string
 	//go:embed jsonschemas/test.schema.json
 	testSchema string
+	//go:embed jsonschemas/runIf.schema.json
+	runIfSchema string
+	//go:embed jsonschemas/conditions/string.schema.json
+	stringCondSchema string
 	//go:embed jsonschemas/context.schema.json
 	contextSchema string
 	//go:embed jsonschemas/resource.schema.json
@@ -119,6 +123,8 @@ var schemas = map[string]string{
 	rootSchemaURL:                           descriptionSchema,
 	bindingSchemaURL:                        bindingSchema,
 	"test.schema.json":                      testSchema,
+	"runIf.schema.json":                     runIfSchema,
+	"conditions.string.schema.json":         stringCondSchema,
 	"context.schema.json":                   contextSchema,
 	"resource.schema.json":                  resourceSchema,
 	"resources.clientServer.schema.json":    clientServerResourceSchema,

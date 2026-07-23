@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "runIf.schema.json",
+  "title": "Test run conditions",
+  "description": "The conditions under which the test is eligible to run. It can be used to constrain the execution to specific settings (e.g.: host architecture). If multiple conditions are specified, their logical outcomes are ANDed.",
+  "type": ["object", "null"],
+  "properties": {
+    "arch": {
+      "description": "Express a run eligibility condition related to the host architecture",
+      "$ref": "conditions.string.schema.json",
+      "properties": {
+        "val": {
+          "enum": ["amd64", "arm64"]
+        }
+      }
+    }
+  }
+}
