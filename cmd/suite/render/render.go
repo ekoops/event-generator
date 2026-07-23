@@ -19,12 +19,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/go-logr/logr"
 	"github.com/spf13/cobra"
 
 	"github.com/falcosecurity/event-generator/cmd/suite/config"
+	"github.com/falcosecurity/event-generator/cmd/suite/test"
 	"github.com/falcosecurity/event-generator/pkg/envvar"
 	"github.com/falcosecurity/event-generator/pkg/test/loader"
 )
@@ -63,7 +65,10 @@ type CommandWrapper struct {
 	// testsDescription is the YAML tests description. If testsDescriptionFiles or testsDescriptionDirs are provided,
 	// this is empty.
 	testsDescription string
-	// printTestsCount indicates if the user just want the tool to out-put the total number of tests.
+	// onlyEligibleTests indicates if the user want the tool just to account for eligible tests.
+	onlyEligibleTests bool
+	// printTestsCount indicates if the user want the tool just to out-put the total number of tests. If
+	// onlyEligibleTests is true, only eligible tests are taken into account.
 	printTestsCount bool
 }
 
@@ -100,6 +105,7 @@ func (cw *CommandWrapper) initCommandFlags() {
 		"The YAML-formatted tests description string specifying the tests to be rendered")
 	cmd.MarkFlagsMutuallyExclusive(config.DescriptionFileFlagName, config.DescriptionFlagName)
 	cmd.MarkFlagsMutuallyExclusive(config.DescriptionDirFlagName, config.DescriptionFlagName)
+	flags.BoolVar(&cw.onlyEligibleTests, "eligible", false, "Only take into account eligible tests")
 	flags.BoolVar(&cw.printTestsCount, "count", false, "Prints the total number of tests and exit")
 }
 
@@ -125,8 +131,20 @@ func (cw *CommandWrapper) run(cmd *cobra.Command, _ []string) {
 	// If the user requested the tests count, just print it and return.
 	if cw.printTestsCount {
 		testsCount := 0
-		for _, testDesc := range testsDescs {
-			testsCount += len(testDesc.desc.Tests)
+		for _, testsDesc := range testsDescs {
+			tests := testsDesc.desc.Tests
+			// Account for all tests if the user didn't request to only take into account eligible ones.
+			if !cw.onlyEligibleTests {
+				testsCount += len(testsDesc.desc.Tests)
+				continue
+			}
+
+			// Only account for eligible tests.
+			for testIdx := range tests {
+				if isEligible, _ := test.IsTestEligible(&tests[testIdx]); isEligible {
+					testsCount++
+				}
+			}
 		}
 		fmt.Println(testsCount)
 		return
@@ -134,15 +152,31 @@ func (cw *CommandWrapper) run(cmd *cobra.Command, _ []string) {
 
 	w := os.Stdout
 	for _, testsDesc := range testsDescs {
-		source := testsDesc.source
+		source, desc := testsDesc.source, testsDesc.desc
 		logger := logger.WithValues("source", source)
+
+		if cw.onlyEligibleTests {
+			// It's fine to modify tests in-place, as after printing the description we will not use it anymore.
+			desc.Tests = slices.DeleteFunc(desc.Tests, func(t loader.Test) bool {
+				isEligible, _ := test.IsTestEligible(&t)
+				return !isEligible
+			})
+		}
+
+		// Skip sources with no tests. This can only happen if cw.onlyEligibleTests is true.
+		if len(desc.Tests) == 0 {
+			logger.Info("Skipped source with no eligible tests")
+			continue
+		}
+
+		// Write header and tests description.
 		header := fmt.Sprintf("---\n# source: %s\n", source)
 		if _, err := w.WriteString(header); err != nil {
 			logger.Error(err, "Error writing tests description header")
 			os.Exit(1)
 		}
 
-		if err := testsDesc.desc.Write(w); err != nil {
+		if err := desc.Write(w); err != nil {
 			logger.Error(err, "Error writing tests description")
 			os.Exit(1)
 		}

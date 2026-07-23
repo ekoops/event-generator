@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "conditions.string.schema.json",
+  "title": "String condition specification",
+  "description": "A string condition specification",
+  "type": ["object", "null"],
+  "properties": {
+    "op": {
+      "description": "The condition operator",
+      "type": "string",
+      "enum": [
+        "eq",
+        "ne"
+      ],
+      "examples": [
+        "eq"
+      ]
+    },
+    "val": {
+      "description": "The condition value"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "op": {
+            "enum": ["eq", "ne"]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "val": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  ],
+  "required": [
+    "op",
+    "val"
+  ]
+}

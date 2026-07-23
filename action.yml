@@ -107,7 +107,7 @@ runs:
         BIN: ${{ steps.build.outputs.bin }}
         DIR: ${{ steps.resolve.outputs.dir }}
       run: |
-        COUNT="$("$BIN" suite render --description-dir "$DIR" --count)"
+        COUNT="$("$BIN" suite render --description-dir "$DIR" --count --eligible)"
         echo "count=${COUNT}" >> "$GITHUB_OUTPUT"
         echo "Expected passing tests across ${DIR}: ${COUNT}"
 

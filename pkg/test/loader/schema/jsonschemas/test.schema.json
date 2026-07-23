@@ -20,6 +20,9 @@
       "type": "string",
       "minLength": 1
     },
+    "runIf": {
+      "$ref": "runIf.schema.json"
+    },
     "runner": {
       "description": "The type of test runner",
       "type": "string",
